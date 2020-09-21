@@ -1,0 +1,424 @@
+---
+title: "DMA Assignment 1"
+author: "Adeniyi Richard Michael-Adenuga"
+date: "5/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(knitr)
+library(ggplot2)
+library(readr)
+library(readxl)
+library(kableExtra)
+library(lubridate)
+library(rfm)
+library(ggfortify)
+```
+
+Read in the data:
+```{r}
+orders <- read_csv("~/Desktop/BusinessAnalytics /Term 3/Digital Marketing/Data/orders.csv", col_names = TRUE)
+
+contacts <- read_csv("~/Desktop/BusinessAnalytics /Term 3/Digital Marketing/Data/contacts.csv", col_names = TRUE)
+
+lines<-read_csv("~/Desktop/BusinessAnalytics /Term 3/Digital Marketing/Data/lines.csv", col_names = TRUE)
+
+summary<-read_csv("~/Desktop/BusinessAnalytics /Term 3/Digital Marketing/Data/summary.csv", col_names = TRUE)
+
+#Format the orderdate in the orders table and contactdate in the contacts table
+
+orders$orderdate <- as.Date(orders$orderdate, format = "%Y - %m - %d")
+
+lines$orderdate <- as.Date(lines$orderdate, format = "%Y - %m - %d")
+
+contacts$contactdate <- as.Date(contacts$contactdate, format = "%Y - %m - %d")
+
+```
+
+# Q2ai Response Rate
+
+## Distribution of days between consecutive catalog mails or emails
+
+### Email
+```{r}
+email_contact<- contacts %>% filter(contacttype=="E")  #Extract Emails
+catalog_contact <- contacts %>% filter(contacttype =="C") #Extract Catalog 
+
+email_contact <- email_contact %>% mutate(year = format(contactdate, "%Y"))
+
+email_frequency <- email_contact %>% group_by(cust_id,year) %>% arrange(contactdate) %>% summarise(days=mean((contactdate -lag(contactdate)),na.rm = TRUE))
+
+email_frequency$days <- round(as.numeric(email_frequency$days),2)
+
+email_frequency %>% ggplot(aes(x=days, color=year) ) + geom_density() + xlim(min=0,max=50) +theme_bw()
+
+```
+
+### Catalog
+```{r}
+catalog_contact <- catalog_contact %>% mutate(year = format(contactdate, "%Y"))
+
+catalog_frequency <- catalog_contact %>% group_by(cust_id,year) %>% arrange(contactdate) %>% summarise(days=mean((contactdate -lag(contactdate)),na.rm = TRUE))
+
+catalog_frequency$days <- round(as.numeric(catalog_frequency$days),2)
+
+catalog_frequency %>% ggplot(aes(x=days, color=year) ) + geom_density() + xlim(min=0,max=50) +theme_bw()
+```
+
+### Response Rates
+
+In order to remove the need to consider interactions between emails and catalog mailing, we focus on cases where we can isolate emails and also catalog mails. 
+
+Since we are told that phone and mail are the only way to place catalog orders, we combine this with the knowledge of those customers to whom catalogs were sent to get an idea of catalog only.
+
+```{r}
+phone_mail_orders <- orders %>% filter(ordermethod=="P" | ordermethod=="M")
+catalog_only_CIDs<- intersect(phone_mail_orders$cust_id,catalog_contact$cust_id)
+catalog_only <- catalog_contact %>% filter(cust_id %in% catalog_only_CIDs )
+```
+
+#### Catalog Only:
+```{r}
+combined_catalog <- inner_join(phone_mail_orders, catalog_only, by= "cust_id") 
+combined_catalog$diff <-combined_catalog$orderdate - combined_catalog$contactdate
+required_catalog_extract<-combined_catalog %>% filter (between(diff,0,22))
+```
+Calculate responsiveness:
+```{r}
+catalog_table<- required_catalog_extract %>% group_by(year) %>% summarise(count=n())
+catalog_table$catalogs_sent<- c(194650, 217354, 211790)
+catalog_table$responsiveness <- (catalog_table$count/catalog_table$catalogs_sent)*100
+catalog_table <- as.data.frame(catalog_table)
+```
+
+#### Email Only:
+Find intersection between email CIDs and catalog CIDs. Combine the intersection with catalog only and then take the remaining as email.
+```{r}
+both_targeted <- intersect(email_contact$cust_id,catalog_only)
+both_CIDs <- rbind(catalog_only_CIDs,both_targeted)
+email_only <- email_contact %>% subset(!(cust_id %in% both_CIDs))
+
+combined <- inner_join(orders, email_only, by= "cust_id")
+combined$diff <-combined$orderdate - combined$contactdate
+required_email_extract<-combined %>% filter (between(diff,0,4))
+```
+Calculate responsiveness:
+```{r}
+email_table<- required_email_extract %>% group_by(year) %>% summarise(count=n())
+email_table$emails_sent<- c(343379, 464134, 534209)
+email_table$responsiveness <- (email_table$count/email_table$emails_sent)*100
+email_table <- as.data.frame(email_table)
+```
+
+Plot both:
+```{r}
+ggplot() + geom_line(data=email_table, aes(x=year, y=responsiveness, col="blue", group=1)) + geom_line(data=catalog_table, aes(x=year, y=responsiveness, col="red", group=1)) + scale_color_identity(name= "Channel",labels=c("Email", "Catalog Mail"),guide = "legend") + xlab(" Year") + ylab ("Response Rate (%)") + theme_bw()
+```
+
+# Q2b RFM
+
+## RFM
+```{r}
+orders_new <- inner_join(orders, lines, by= "ordernum")
+```
+
+```{r}
+current_date <- max(orders_new$orderdate.x)
+
+orders_new <- orders_new  %>% mutate(year = format(orderdate.x, "%Y"))
+
+orders_new2 <- orders_new %>% filter(year== 2007 | year==2008)
+
+RFM <- orders_new2 %>% group_by(cust_id.x) %>% summarize(Recency = min(current_date-orderdate.x), Frequency= n(), Avg_spend=mean(linedollars, na.rm = TRUE))
+```
+
+Add the ranks
+```{r}
+RFM$R <- ntile(-RFM$Recency,5)
+RFM$F <- ntile(RFM$Frequency,5)
+RFM$M <- ntile(RFM$Avg_spend,5)
+```
+Combine for RFM score
+```{r}
+RFM <- RFM %>% mutate(RFM = paste0(R, F, M))
+```
+
+```{r}
+RFM %>% ggplot() + geom_density(aes(x=Recency)) +xlim(min=0, max=400) + theme_bw()
+RFM %>% ggplot() + geom_density(aes(x=Frequency)) + xlim(min=0, max=30)+theme_bw()
+RFM %>% ggplot() + geom_density(aes(x=Avg_spend))+ xlim(min=0, max=250)+ xlab("Average Spend")+theme_bw()
+```
+
+## Put into RFM Segments
+
+Segments as definied in the body of the report.
+
+```{r}
+RFM$Index<- 1:nrow(RFM)
+```
+
+champ
+```{r}
+champ<-RFM %>% filter(between(R,4,5) & between(M,4,5) & between(F,4,5))
+RFM$segment<-NA
+
+for(i in champ$Index){
+  RFM[i,10] <- "Champions"
+}
+```
+
+Loyal customers
+```{r}
+LC<-RFM %>% filter(between(R,2,5) & between(M,3,5) & between(F,3,5))
+
+for(i in LC$Index){
+  RFM[i,10] <- "Loyal Customers"
+}
+```
+
+Potential Loyalist
+```{r}
+PL<-RFM %>% filter(between(R,3,5) & between(F,1,3) & between(M,1,3))
+
+for(i in PL$Index){
+  RFM[i,10] <- "Potential Loyalist"
+}
+```
+
+Frugal Spenders
+```{r}
+FS<-RFM %>% filter(between(R,3,5) & between(F,3,5) & between(M,1,2))
+
+for(i in FS$Index){
+  RFM[i,10] <- "Frugal Spenders"
+}
+```
+New Customers
+```{r}
+NC<-RFM %>% filter(between(R,4,5) & between(F,0,1) & between(M,0,1))
+
+for(i in NC$Index){
+  RFM[i,10] <- "New Customer"
+}
+```
+Promising
+```{r}
+P<-RFM %>% filter(between(R,3,4) & between(F,0,1) & between(M,0,1))
+
+for(i in P$Index){
+  RFM[i,10] <- "Promising"
+}
+```
+Need Attention
+```{r}
+N_A<-RFM %>% filter(between(R,2,3) & between(F,2,3) & between(M,2,3))
+
+for(i in N_A$Index){
+  RFM[i,10] <- "Need Attention"
+}
+```
+About to sleep
+```{r}
+AS<-RFM %>% filter(between(R,2,3) & between(F,0,2) & between(M,0,2))
+
+for(i in AS$Index){
+  RFM[i,10] <- "About To Sleep"
+}
+```
+At Risk
+```{r}
+AR<-RFM %>% filter(between(R,0,2) & between(F,2,5) & between(M,2,5))
+
+for(i in AR$Index){
+  RFM[i,10] <- "At Risk"
+}
+```
+Can't Lose Them
+```{r}
+CLT<-RFM %>% filter(between(R,0,1) & between(F,4,5) & between(M,4,5))
+
+for(i in CLT$Index){
+  RFM[i,10] <- "Can't Lose Them"
+}
+```
+Hibernating
+```{r}
+H<-RFM %>% filter(between(R,1,2) & between(F,1,2) & between(M,1,2))
+
+for(i in H$Index){
+  RFM[i,10] <- "Hibernating"
+}
+```
+Lost
+```{r}
+L<-RFM %>% filter(between(R,0,2) & between(F,0,2) & between(M,0,2))
+
+for(i in L$Index){
+  RFM[i,10] <- "Lost"
+}
+```
+
+New Big Spender
+```{r}
+NBS<-RFM %>% filter(between(R,3,5) & between(F,0,2) & between(M,3,5))
+
+for(i in NBS$Index){
+  RFM[i,10] <- "New Big Spender"
+}
+```
+
+One Time Big Spender
+```{r}
+OTBS<-RFM %>% filter(between(R,1,2) & between(F,1,2) & between(M,3,5))
+
+for(i in OTBS$Index){
+  RFM[i,10] <- "One Time Big Spender"
+}
+```
+
+```{r}
+#Remove NAs
+RFM_segments <- na.omit(RFM)
+```
+
+```{r}
+seg_counts<- RFM_segments %>% group_by(segment) %>% summarise(count=n()) %>% mutate(proportions = round((count/sum(count)*100),2))
+```
+
+```{r}
+seg_counts %>% ggplot(aes(x=segment, y=proportions, fill=segment)) + geom_bar(stat="identity") + coord_flip() + theme_bw() + ylab("Proportions (%)") + xlab("Segments")
+```
+
+## Get Response Rates
+
+This section will focus on those to whom catalogs were sent and build on the required_catalog_extract table.
+```{r}
+required_catalog_extract_2 <- required_catalog_extract %>% filter(year== 2007)
+
+required_catalog_extract_2$Recency <- current_date - required_catalog_extract_2$orderdate
+```
+
+```{r}
+RFM_catalog <- required_catalog_extract_2 %>% group_by(cust_id) %>% summarize(Recency = min(Recency))
+```
+
+```{r}
+cat_mail<- catalog_only %>% filter(year!=2005)
+cat_mail<- cat_mail %>% group_by(cust_id) %>%  summarise(Mailed=n())
+RFM_catalog <- inner_join(RFM_catalog, cat_mail, by="cust_id")
+```
+
+To get order Frequency and Average Spend, need to go back to lines table:
+```{r}
+required_catalog_CID <- unique(required_catalog_extract_2$cust_id)
+required_catalog_ordernum <- unique(required_catalog_extract_2$ordernum)
+
+catalog_lines <- lines %>% filter(cust_id %in% required_catalog_CID)
+catalog_lines <- catalog_lines %>% filter( ordernum %in% required_catalog_ordernum)
+
+catalog_lines_summary <- catalog_lines %>% group_by(cust_id)  %>% summarise(Avg_spend=mean(linedollars, na.rm = TRUE))
+
+single_orders <- catalog_lines %>% group_by(cust_id,ordernum, orderdate) %>% summarise(count=n()) %>% group_by(cust_id) %>% summarise(Frequency=n())
+
+```
+
+```{r}
+RFM_catalog <- inner_join(RFM_catalog,catalog_lines_summary, by="cust_id" )
+RFM_catalog <- inner_join(RFM_catalog,single_orders, by="cust_id" )
+```
+
+Add ranks:
+```{r}
+RFM_catalog$R <- ntile(-RFM_catalog$Recency,5)
+RFM_catalog$F <- ntile(RFM_catalog$Frequency,5)
+RFM_catalog$M <- ntile(RFM_catalog$Avg_spend.x,5)
+```
+
+Combine for RFM Score
+```{r}
+RFM_catalog <- RFM_catalog %>% mutate(RFM = paste0(R, F, M))
+```
+
+Summarise by RFM Score:
+```{r}
+RFM_catalog_summarised<- RFM_catalog %>% group_by(RFM) %>% summarise(Responses=sum(Frequency),Mailed = sum(Mailed))
+
+RFM_catalog_summarised$response_rate<- round((RFM_catalog_summarised$Responses/RFM_catalog_summarised$Mailed)*100,2)
+
+RFM_catalog_summarised <- RFM_catalog_summarised %>% arrange(desc(response_rate))
+
+```
+
+RFM Economics
+```{r}
+cost_per_mail <- 1
+unit_profit <- 30
+
+RFM_catalog_summarised$profit <- RFM_catalog_summarised$response_rate * RFM_catalog_summarised$Responses * unit_profit
+RFM_catalog_summarised$cost <- cost_per_mail * RFM_catalog_summarised$Mailed
+RFM_catalog_summarised$cumprofit<- cumsum(RFM_catalog_summarised$profit)
+RFM_catalog_summarised$cumcost<- cumsum(RFM_catalog_summarised$cost)
+RFM_catalog_summarised$TotalMailed<-cumsum(RFM_catalog_summarised$Mailed)
+
+RFM_catalog_summarised$ROI <- RFM_catalog_summarised$cumprofit/RFM_catalog_summarised$cost
+```
+
+plot:
+```{r}
+RFM_catalog_summarised %>% ggplot(aes(y=ROI,x=TotalMailed)) +geom_line()
+```
+
+# What effect do frequency catalog mailing and emailing have on line dollars?
+Begin with customers mailed and sent a catalog:
+```{r}
+received_both <- intersect(email_contact$cust_id, catalog_contact$cust_id)
+both_mailed<- contacts %>% filter(cust_id %in% received_both) %>% group_by(cust_id, contacttype) %>% summarise(count=n())
+
+both_mailed <- both_mailed %>% spread(key=contacttype, value= count)
+```
+Distribution of email and catalog sent:
+```{r}
+ggplot() +geom_density(data=both_mailed, aes(x=both_mailed$E, col="blue")) + geom_density(data=both_mailed, aes(x=both_mailed$C, col="red")) + scale_color_identity(name= "Channel",labels=c("Email", "Catalog Mail"),guide = "legend")  + xlab("Quantity Mailed") + theme_bw()
+```
+ Correlation between Mail sent and Catalog sent:
+ 
+```{r}
+ggplot() +geom_point(data=both_mailed, aes(x=both_mailed$E, y=both_mailed$C, alpha=0.4)) + xlab("Quantity Emailed") + ylab("Quantity Catalog Mailed")+ theme_bw()
+```
+```{r}
+both_lines <- lines %>% filter(orderdate>="2005-01-06" & orderdate<="2007-12-26")
+both_lines <- lines %>% group_by(cust_id) %>%  summarise(Total_spend=sum(linedollars))
+both_mailed <- inner_join(both_mailed, both_orders, by="cust_id")
+```
+
+Run linear regression:
+```{r}
+mod1<- lm(Total_spend ~ C + E, data = both_mailed)
+summary(mod1)
+```
+```{r}
+mod2<- lm(Total_spend ~ C*E, data = both_mailed)
+summary(mod2)
+```
+
+# CLV Calculation
+Find customers acquired in 2000:
+```{r}
+pre_2001 <- summary %>% select(c("Cust_ID","AcqDate"))
+pre_2001 <- pre_2001 %>% filter(between(as.numeric(AcqDate),200000,200012))
+```
+
+```{r}
+CLV<- orders_new %>% group_by(cust_id.x,year) %>% summarise(revenue = sum(linedollars))
+CLV<-as.data.frame(CLV)
+CLV <- CLV %>% spread(key="year", value="revenue")
+```
+
+Filter for customers acquired in 2000:
+```{r}
+CLV_2000 <- CLV %>% filter(cust_id.x %in% pre_2001$Cust_ID)
+CLV_2000[is.na(CLV_2000)]<-0 #Fill NAs
+```
